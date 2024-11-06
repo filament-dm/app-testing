@@ -1,0 +1,40 @@
+[package]
+authors = ["Damir Jelić <poljar@termina.org.uk>"]
+description = "Helpers to write tests for the Matrix SDK"
+edition = "2021"
+homepage = "https://github.com/matrix-org/matrix-rust-sdk"
+keywords = ["matrix", "chat", "messaging", "ruma"]
+license = "Apache-2.0"
+name = "matrix-sdk-test"
+readme = "README.md"
+repository = "https://github.com/matrix-org/matrix-rust-sdk"
+rust-version = { workspace = true }
+version = "0.7.0"
+
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+http = { workspace = true }
+matrix-sdk-test-macros = { version = "0.7.0", path = "../matrix-sdk-test-macros" }
+once_cell = { workspace = true }
+ruma = { workspace = true, features = ["rand"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ctor = "0.2.0"
+tokio = { workspace = true, features = ["rt", "macros"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+wiremock = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2.6", default-features = false, features = ["js"] }
+wasm-bindgen-test = "0.3.33"
+
+[lints]
+workspace = true
+
+[package.metadata.release]
+release = false

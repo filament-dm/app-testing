@@ -1,0 +1,51 @@
+[package]
+authors = ["Damir Jelić <poljar@termina.org.uk>"]
+description = "Collection of common types and imports used in the matrix-sdk"
+edition = "2021"
+homepage = "https://github.com/matrix-org/matrix-rust-sdk"
+keywords = ["matrix", "chat", "messaging", "ruma", "nio"]
+license = "Apache-2.0"
+name = "matrix-sdk-common"
+readme = "README.md"
+repository = "https://github.com/matrix-org/matrix-rust-sdk"
+rust-version = { workspace = true }
+version = "0.7.0"
+
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+
+[features]
+js = ["wasm-bindgen-futures"]
+uniffi = ["dep:uniffi"]
+
+[dependencies]
+async-trait = { workspace = true }
+futures-core = { workspace = true }
+ruma = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time"] }
+uniffi = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-util = { workspace = true, features = ["channel"] }
+wasm-bindgen-futures = { version = "0.4.33", optional = true }
+gloo-timers = { version = "0.3.0", features = ["futures"] }
+web-sys = { version = "0.3.60", features = ["console"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "ansi"] }
+wasm-bindgen = "0.2.84"
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+proptest = { version = "1.4.0", default-features = false, features = ["std"] }
+matrix-sdk-test = { workspace = true }
+wasm-bindgen-test = "0.3.33"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+js-sys = "0.3.64"
+
+[lints]
+workspace = true

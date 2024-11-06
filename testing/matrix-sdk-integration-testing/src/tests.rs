@@ -1,0 +1,10 @@
+mod auth;
+mod e2ee;
+mod invitations;
+mod nse;
+mod redaction;
+mod repeated_join;
+mod room;
+mod room_directory_search;
+mod sliding_sync;
+mod timeline;

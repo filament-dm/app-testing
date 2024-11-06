@@ -1,0 +1,22 @@
+namespace matrix_sdk_ffi {};
+
+dictionary Mentions {
+  sequence<string> user_ids;
+  boolean room;
+};
+
+interface RoomMessageEventContentWithoutRelation {
+    RoomMessageEventContentWithoutRelation with_mentions(Mentions mentions);
+};
+
+[Error]
+interface ClientError {
+    Generic(string msg);
+};
+
+interface MediaSource {
+    [Name=from_json, Throws=ClientError]
+    constructor(string json);
+    string to_json();
+    string url();
+};

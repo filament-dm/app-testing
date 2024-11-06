@@ -1,0 +1,32 @@
+[package]
+name = "multiverse"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[[bin]]
+name = "multiverse"
+test = false
+
+[dependencies]
+anyhow = { workspace = true }
+color-eyre = "0.6.2"
+crossterm = "0.27.0"
+futures-util = { workspace = true }
+imbl = { workspace = true }
+matrix-sdk = { path = "../../crates/matrix-sdk", features = ["sso-login"] }
+matrix-sdk-ui = { path = "../../crates/matrix-sdk-ui" }
+ratatui = "0.26.1"
+rpassword = "7.3.1"
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing = { workspace = true }
+tracing-appender = { version = "0.2.2" }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+
+[lints]
+workspace = true
+
+[package.metadata.release]
+release = false
