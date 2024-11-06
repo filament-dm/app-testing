@@ -1,0 +1,90 @@
+[package]
+authors = ["Damir Jelić <poljar@termina.org.uk>"]
+description = "Matrix encryption library"
+edition = "2021"
+homepage = "https://github.com/matrix-org/matrix-rust-sdk"
+keywords = ["matrix", "chat", "messaging", "ruma", "nio"]
+license = "Apache-2.0"
+name = "matrix-sdk-crypto"
+readme = "README.md"
+repository = "https://github.com/matrix-org/matrix-rust-sdk"
+rust-version = { workspace = true }
+version = "0.7.2"
+
+[package.metadata.docs.rs]
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = []
+automatic-room-key-forwarding = []
+js = ["ruma/js", "vodozemac/js", "matrix-sdk-common/js"]
+qrcode = ["dep:matrix-sdk-qrcode"]
+experimental-algorithms = []
+uniffi = ["dep:uniffi"]
+_disable-minimum-rotation-period-ms = []
+
+# "message-ids" feature doesn't do anything and is deprecated.
+message-ids = []
+
+# Testing helpers for implementations based upon this
+testing = ["matrix-sdk-test"]
+
+[dependencies]
+aes = "0.8.1"
+as_variant = { workspace = true }
+async-trait = { workspace = true }
+bs58 = { version = "0.5.0" }
+byteorder = { workspace = true }
+cfg-if = "1.0"
+ctr = "0.9.1"
+eyeball = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+hkdf = "0.12.3"
+hmac = "0.12.1"
+itertools = { workspace = true }
+js_option = "0.1.1"
+matrix-sdk-qrcode = { workspace = true, optional = true }
+matrix-sdk-common = { workspace = true }
+matrix-sdk-test = { workspace = true, optional = true }  # feature = testing only
+pbkdf2 = { version = "0.12.2", default-features = false }
+rand = { workspace = true }
+rmp-serde = "1.1.1"
+ruma = { workspace = true, features = ["rand", "canonical-json", "unstable-msc3814"] }
+serde = { workspace = true, features = ["derive", "rc"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+subtle = "2.5.0"
+time = { version = "0.3.34", features = ["formatting"] }
+tokio-stream = { workspace = true, features = ["sync"] }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true, features = ["attributes"] }
+url = { workspace = true }
+ulid = { version = "1.0.0" }
+uniffi = { workspace = true, optional = true }
+vodozemac = { workspace = true }
+zeroize = { workspace = true, features = ["zeroize_derive"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tokio = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+assert_matches = { workspace = true }
+assert_matches2 = { workspace = true }
+futures-executor = { workspace = true }
+http = { workspace = true }
+indoc = "2.0.1"
+matrix-sdk-test = { workspace = true }
+proptest = { version = "1.0.0", default-features = false, features = ["std"] }
+similar-asserts = "1.5.0"
+# required for async_test macro
+stream_assert = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

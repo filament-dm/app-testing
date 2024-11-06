@@ -1,0 +1,66 @@
+[package]
+name = "matrix-sdk-ui"
+description = "GUI-centric utilities on top of matrix-rust-sdk (experimental)."
+version = "0.7.0"
+edition = "2021"
+repository = "https://github.com/matrix-org/matrix-rust-sdk"
+license = "Apache-2.0"
+rust-version = { workspace = true }
+
+[features]
+default = ["native-tls"]
+
+native-tls = ["matrix-sdk/native-tls"]
+rustls-tls = ["matrix-sdk/rustls-tls"]
+
+uniffi = ["dep:uniffi", "matrix-sdk/uniffi", "matrix-sdk-base/uniffi"]
+
+# Add support for encrypted extensible events.
+unstable-msc3956 = ["ruma/unstable-msc3956"]
+
+[dependencies]
+as_variant = { workspace = true }
+async_cell = "0.2.2"
+async-once-cell = "0.5.2"
+async-rx = { workspace = true }
+async-stream = { workspace = true }
+chrono = "0.4.23"
+eyeball = { workspace = true }
+eyeball-im = { workspace = true }
+eyeball-im-util = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+fuzzy-matcher = "0.3.7"
+growable-bloom-filter = { workspace = true }
+imbl = { workspace = true, features = ["serde"] }
+indexmap = "2.0.0"
+itertools = { workspace = true }
+matrix-sdk = { workspace = true, features = ["experimental-sliding-sync", "e2e-encryption"] }
+matrix-sdk-base = { workspace = true }
+mime = "0.3.16"
+once_cell = { workspace = true }
+pin-project-lite = { workspace = true }
+ruma = { workspace = true, features = ["html", "unstable-msc3381"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
+tracing = { workspace = true, features = ["attributes"] }
+unicode-normalization = "0.1.22"
+uniffi = { workspace = true, optional = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+assert-json-diff = { workspace = true }
+assert_matches = { workspace = true }
+assert_matches2 = { workspace = true }
+eyeball-im-util = { workspace = true }
+matrix-sdk = { workspace = true, features = ["testing", "sqlite"] }
+matrix-sdk-test = { workspace = true }
+stream_assert = { workspace = true }
+tempfile = "3.3.0"
+wiremock = { workspace = true }
+
+[lints]
+workspace = true
