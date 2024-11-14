@@ -1,3 +1,4 @@
+loglevel: info
 homeserver_url: https://matrix.org
 username: example-user 
 password: "password"

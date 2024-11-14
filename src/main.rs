@@ -25,6 +25,7 @@ mod verification;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Config {
+    loglevel: String,
     homeserver_url: String,
     username: String,
     password: String,
@@ -190,7 +191,10 @@ async fn watch_verification_state(client: Client) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    std::env::set_var("RUST_LOG", "info");
+    let f = std::fs::File::open("config.yaml").context("Unable to open config.yaml")?;
+    let config: Config = serde_yaml::from_reader(f)?;
+
+    std::env::set_var("RUST_LOG", config.loglevel.as_str());
     // when we turn on raw mode to capture keyboard input (see
     // keyboard.start()), we need to be emitting carriage returns to get the
     // logger to output lines properly
@@ -210,8 +214,6 @@ async fn main() -> Result<()> {
     println!("SPACE -- print timeline");
     println!("");
 
-    let f = std::fs::File::open("config.yaml").context("Unable to open config.yaml")?;
-    let config: Config = serde_yaml::from_reader(f)?;
     let client = login(&config).await?;
 
     let _ = tokio::spawn(watch_verification_state(client.clone()));
