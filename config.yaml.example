@@ -1,4 +1,4 @@
-loglevel: info
+logfilter: error,app_testing=info
 homeserver_url: https://matrix.org
 username: example-user 
 password: "password"

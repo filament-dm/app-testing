@@ -25,8 +25,9 @@ mod timeline;
 mod verification;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Config {
-    loglevel: String,
+    logfilter: String,
     homeserver_url: String,
     username: String,
     password: String,
@@ -231,11 +232,10 @@ impl Write for CarriageReturnWriter {
 async fn main() -> Result<()> {
     let f = std::fs::File::open("config.yaml").context("Unable to open config.yaml")?;
     let config: Config = serde_yaml::from_reader(f)?;
-    std::env::set_var("RUST_LOG", config.loglevel.as_str());
 
     let cr_logger = CarriageReturnWriter::new();
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(config.logfilter.as_str())
         .with_writer(Mutex::new(cr_logger))
         .init();
 
