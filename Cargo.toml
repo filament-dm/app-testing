@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.91"
 crossterm = "0.28.1"
-env_logger = "0.11.5"
 futures-util = "0.3.31"
 lazy_static = "1.5.0"
 log = "0.4.22"
@@ -15,3 +14,6 @@ matrix-sdk-ui = { path = "matrix-rust-sdk/crates/matrix-sdk-ui" }
 serde = "1.0.214"
 serde_yaml = "0.9.34"
 tokio = { version = "1.41.0", features = ["rt-multi-thread"] }
+tracing = { version = "0.1.40", default-features = false, features = ["std"] }
+tracing-core = "0.1.32"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }

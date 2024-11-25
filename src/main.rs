@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use matrix_sdk::{
@@ -189,21 +190,53 @@ async fn watch_verification_state(client: Client) {
     }
 }
 
+// When we turn on raw mode to capture keyboard input (see keyboard.start()), we
+// need to be emitting carriage returns to get the logger to output lines
+// properly. This is a writer for tracing that will do that.
+struct CarriageReturnWriter {
+    stdout: std::io::Stdout,
+}
+
+impl CarriageReturnWriter {
+    fn new() -> Self {
+        CarriageReturnWriter {
+            stdout: std::io::stdout(),
+        }
+    }
+}
+
+impl Write for CarriageReturnWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let size = buf.len();
+        let mut crlf_buf = Vec::new();
+        for &b in buf {
+            if b == b'\n' {
+                crlf_buf.push(b'\r');
+            }
+            crlf_buf.push(b);
+        }
+        self.stdout.write(&crlf_buf)?;
+
+        // if everything went ok we have to return a size equal to what we got
+        // passed in
+        Ok(size)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::stdout().flush()
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let f = std::fs::File::open("config.yaml").context("Unable to open config.yaml")?;
     let config: Config = serde_yaml::from_reader(f)?;
-
     std::env::set_var("RUST_LOG", config.loglevel.as_str());
-    // when we turn on raw mode to capture keyboard input (see
-    // keyboard.start()), we need to be emitting carriage returns to get the
-    // logger to output lines properly
-    env_logger::builder()
-        .format(|buf, record| {
-            // add carriage returns to newlines
-            let s = format!("[{}] {}\n", record.level(), record.args()).replace("\n", "\r\n");
-            buf.write(s.as_bytes()).map(|_| ())
-        })
+
+    let cr_logger = CarriageReturnWriter::new();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(Mutex::new(cr_logger))
         .init();
 
     println!("Starting");
