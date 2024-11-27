@@ -18,6 +18,9 @@ use matrix_sdk::{
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::{cmp::min, path::PathBuf};
+use tracing::{Event, Subscriber};
+use tracing_log::LogTracer;
+use tracing_subscriber::{layer::SubscriberExt, Layer, Registry};
 
 mod events;
 mod keyboard;
@@ -195,36 +198,47 @@ async fn watch_verification_state(client: Client) {
 // need to be emitting carriage returns to get the logger to output lines
 // properly. This is a writer for tracing that will do that.
 struct CarriageReturnWriter {
-    stdout: std::io::Stdout,
+    stdout: Mutex<std::io::Stdout>,
 }
 
 impl CarriageReturnWriter {
     fn new() -> Self {
         CarriageReturnWriter {
-            stdout: std::io::stdout(),
+            stdout: Mutex::new(std::io::stdout()),
         }
     }
 }
 
-impl Write for CarriageReturnWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let size = buf.len();
-        let mut crlf_buf = Vec::new();
-        for &b in buf {
-            if b == b'\n' {
-                crlf_buf.push(b'\r');
-            }
-            crlf_buf.push(b);
-        }
-        self.stdout.write(&crlf_buf)?;
+impl<S: Subscriber> Layer<S> for CarriageReturnWriter {
+    fn on_event(&self, event: &Event, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        let metadata = event.metadata();
 
-        // if everything went ok we have to return a size equal to what we got
-        // passed in
-        Ok(size)
+        let mut message = String::new();
+        let mut visitor = MessageVisitor(&mut message);
+        event.record(&mut visitor);
+
+        let output = format!(
+            "[{}] - {} - {}",
+            metadata.target(),
+            metadata.level(),
+            message,
+        )
+        .replace("\n", "\r\n");
+        let mut stdout = self.stdout.lock().unwrap();
+        let _ = stdout.write(output.as_bytes());
+        let _ = stdout.write("\r\n".as_bytes());
+        let _ = stdout.flush();
     }
+}
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        std::io::stdout().flush()
+// Visitor to extract the message from the event
+struct MessageVisitor<'a>(&'a mut String);
+
+impl<'a> tracing::field::Visit for MessageVisitor<'a> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0.push_str(&format!("{:?}", value));
+        }
     }
 }
 
@@ -233,11 +247,14 @@ async fn main() -> Result<()> {
     let f = std::fs::File::open("config.yaml").context("Unable to open config.yaml")?;
     let config: Config = serde_yaml::from_reader(f)?;
 
+    LogTracer::init().expect("Failed to set logger");
     let cr_logger = CarriageReturnWriter::new();
-    tracing_subscriber::fmt()
-        .with_env_filter(config.logfilter.as_str())
-        .with_writer(Mutex::new(cr_logger))
-        .init();
+    let subscriber = Registry::default()
+        .with(tracing_subscriber::EnvFilter::new(
+            config.logfilter.as_str(),
+        ))
+        .with(cr_logger);
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
     println!("Starting");
     println!("Use a different Matrix client to start the verification process. This app will auto-accept verification.");

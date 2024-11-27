@@ -114,6 +114,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-core",
+ "tracing-log",
  "tracing-subscriber",
 ]
 
