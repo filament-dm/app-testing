@@ -1,7 +1,8 @@
-use std::io::Write;
 use std::sync::Mutex;
+use std::{io::Write, sync::Arc};
 
 use anyhow::{Context, Result};
+use futures_util::{pin_mut, StreamExt as _};
 use matrix_sdk::{
     config::SyncSettings,
     encryption::{BackupDownloadStrategy, EncryptionSettings},
@@ -15,6 +16,7 @@ use matrix_sdk::{
     },
     Client,
 };
+use matrix_sdk_ui::room_list_service::filters::new_filter_non_left;
 use serde::{Deserialize, Serialize};
 use serde_yaml;
 use std::{cmp::min, path::PathBuf};
@@ -22,8 +24,11 @@ use tracing::{Event, Subscriber};
 use tracing_log::LogTracer;
 use tracing_subscriber::{layer::SubscriberExt, Layer, Registry};
 
+use rooms::ROOM_LIST;
+
 mod events;
 mod keyboard;
+mod rooms;
 mod timeline;
 mod verification;
 
@@ -134,6 +139,7 @@ async fn start_matrix(config: Config, client: Client) -> Result<()> {
     let sync_service = matrix_sdk_ui::sync_service::SyncService::builder(client.clone())
         .build()
         .await?;
+
     let mut state_sub = sync_service.state();
     tokio::spawn(async move {
         loop {
@@ -149,6 +155,11 @@ async fn start_matrix(config: Config, client: Client) -> Result<()> {
             }
         }
     });
+
+    let room_list_service = sync_service.room_list_service();
+    let _ = tokio::spawn(watch_room_list(room_list_service));
+    let _ = tokio::spawn(rooms::log_room_list());
+
     sync_service.start().await;
 
     log::info!("First sync");
@@ -192,6 +203,25 @@ async fn watch_verification_state(client: Client) {
             break;
         }
     }
+}
+
+async fn watch_room_list(
+    room_list_service: Arc<matrix_sdk_ui::RoomListService>,
+) -> anyhow::Result<()> {
+    log::info!("Watching room list");
+    let rooms = room_list_service.all_rooms().await?;
+    let (stream, controller) = rooms.entries_with_dynamic_adapters(5);
+    controller.set_filter(Box::new(new_filter_non_left()));
+
+    pin_mut!(stream);
+    while let Some(diffs) = stream.next().await {
+        let mut room_list = ROOM_LIST.lock().unwrap();
+        for diff in diffs {
+            log::info!("Room list diff: {:?}", diff.clone());
+            diff.apply(&mut room_list);
+        }
+    }
+    Ok(())
 }
 
 // When we turn on raw mode to capture keyboard input (see keyboard.start()), we
@@ -261,6 +291,7 @@ async fn main() -> Result<()> {
     println!("");
     println!("ctrl-c -- stop program");
     println!("p -- paginate timeline backwards");
+    println!("R -- list rooms");
     println!("SPACE -- print timeline");
     println!("");
 

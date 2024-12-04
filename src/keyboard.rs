@@ -6,6 +6,8 @@ use crossterm::{
 
 use crate::events::PAGINATE_BACKWARDS;
 
+use crate::events::LIST_ROOMS;
+
 async fn process_events() -> anyhow::Result<()> {
     loop {
         let Event::Key(event) = read()? else {
@@ -23,6 +25,10 @@ async fn process_events() -> anyhow::Result<()> {
             let _ = PAGINATE_BACKWARDS.0.send(10).await;
         } else if event.code == KeyCode::Char(' ') {
             let _ = PAGINATE_BACKWARDS.0.send(0).await;
+        }
+
+        if event.code == KeyCode::Char('R') {
+            let _ = LIST_ROOMS.0.send(()).await;
         }
     }
 

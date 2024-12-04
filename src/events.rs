@@ -11,6 +11,12 @@ lazy_static! {
         (tx, Mutex::new(rx))
     };
 
+    // We push requests to list all rooms into this channel.
+    pub static ref LIST_ROOMS: (mpsc::Sender<()>, tokio::sync::Mutex<mpsc::Receiver<()>>) = {
+        let (tx, rx) = mpsc::channel::<()>(10);
+        (tx, Mutex::new(rx))
+    };
+
     // e2e verification state
     pub static ref VERIFIED: Mutex<bool> = Mutex::new(false);
 
