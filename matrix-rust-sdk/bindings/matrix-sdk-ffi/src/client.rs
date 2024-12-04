@@ -26,16 +26,13 @@ use matrix_sdk::{
     reqwest::StatusCode,
     ruma::{
         api::client::{
-            media::get_content_thumbnail::v3::Method,
             push::{EmailPusherData, PusherIds, PusherInit, PusherKind as RumaPusherKind},
             room::{create_room, Visibility},
             session::get_login_types,
             user_directory::search_users,
         },
         events::{
-            room::{
-                avatar::RoomAvatarEventContent, encryption::RoomEncryptionEventContent, MediaSource,
-            },
+            room::{avatar::RoomAvatarEventContent, encryption::RoomEncryptionEventContent},
             AnyInitialStateEvent, AnyToDeviceEvent, InitialStateEvent,
         },
         serde::Raw,
@@ -56,7 +53,12 @@ use ruma::{
     },
     events::{
         ignored_user_list::IgnoredUserListEventContent,
-        room::{join_rules::RoomJoinRulesEventContent, power_levels::RoomPowerLevelsEventContent},
+        room::{
+            join_rules::{
+                AllowRule as RumaAllowRule, JoinRule as RumaJoinRule, RoomJoinRulesEventContent,
+            },
+            power_levels::RoomPowerLevelsEventContent,
+        },
         GlobalAccountDataEventType,
     },
     push::{HttpPusherData as RumaHttpPusherData, PushFormat as RumaPushFormat},
@@ -77,7 +79,7 @@ use crate::{
     notification_settings::NotificationSettings,
     room_directory_search::RoomDirectorySearch,
     room_preview::RoomPreview,
-    ruma::AuthData,
+    ruma::{AuthData, MediaSource},
     sync_service::{SyncService, SyncServiceBuilder},
     task_handle::TaskHandle,
     utils::AsyncRuntimeDropped,
@@ -195,7 +197,7 @@ pub struct Client {
 impl Client {
     pub async fn new(
         sdk_client: MatrixClient,
-        cross_process_refresh_lock_id: Option<String>,
+        enable_oidc_refresh_lock: bool,
         session_delegate: Option<Arc<dyn ClientSessionDelegate>>,
     ) -> Result<Self, ClientError> {
         let session_verification_controller: Arc<
@@ -211,19 +213,27 @@ impl Client {
             }
         });
 
+        let cross_process_store_locks_holder_name =
+            sdk_client.cross_process_store_locks_holder_name().to_owned();
+
         let client = Client {
             inner: AsyncRuntimeDropped::new(sdk_client),
             delegate: RwLock::new(None),
             session_verification_controller,
         };
 
-        if let Some(process_id) = cross_process_refresh_lock_id {
+        if enable_oidc_refresh_lock {
             if session_delegate.is_none() {
                 return Err(anyhow::anyhow!(
                     "missing session delegates when enabling the cross-process lock"
                 ))?;
             }
-            client.inner.oidc().enable_cross_process_refresh_lock(process_id.clone()).await?;
+
+            client
+                .inner
+                .oidc()
+                .enable_cross_process_refresh_lock(cross_process_store_locks_holder_name)
+                .await?;
         }
 
         if let Some(session_delegate) = session_delegate {
@@ -443,7 +453,7 @@ impl Client {
             .inner
             .media()
             .get_media_file(
-                &MediaRequestParameters { source, format: MediaFormat::File },
+                &MediaRequestParameters { source: source.media_source, format: MediaFormat::File },
                 filename,
                 &mime_type,
                 use_cache,
@@ -696,7 +706,7 @@ impl Client {
         progress_watcher: Option<Box<dyn ProgressWatcher>>,
     ) -> Result<String, ClientError> {
         let mime_type: mime::Mime = mime_type.parse().context("Parsing mime type")?;
-        let request = self.inner.media().upload(&mime_type, data);
+        let request = self.inner.media().upload(&mime_type, data, None);
 
         if let Some(progress_watcher) = progress_watcher {
             let mut subscriber = request.subscribe_to_send_progress();
@@ -716,7 +726,7 @@ impl Client {
         &self,
         media_source: Arc<MediaSource>,
     ) -> Result<Vec<u8>, ClientError> {
-        let source = (*media_source).clone();
+        let source = (*media_source).clone().media_source;
 
         debug!(?source, "requesting media file");
         Ok(self
@@ -732,9 +742,9 @@ impl Client {
         width: u64,
         height: u64,
     ) -> Result<Vec<u8>, ClientError> {
-        let source = (*media_source).clone();
+        let source = (*media_source).clone().media_source;
 
-        debug!(source = ?media_source, width, height, "requesting media thumbnail");
+        debug!(?source, width, height, "requesting media thumbnail");
         Ok(self
             .inner
             .media()
@@ -742,7 +752,6 @@ impl Client {
                 &MediaRequestParameters {
                     source,
                     format: MediaFormat::Thumbnail(MediaThumbnailSettings::new(
-                        Method::Scale,
                         UInt::new(width).unwrap(),
                         UInt::new(height).unwrap(),
                     )),
@@ -1132,21 +1141,27 @@ impl Client {
         Ok(())
     }
 
-    /// Checks if a room alias is available in the current homeserver.
+    /// Checks if a room alias is not in use yet.
+    ///
+    /// Returns:
+    /// - `Ok(true)` if the room alias is available.
+    /// - `Ok(false)` if it's not (the resolve alias request returned a `404`
+    ///   status code).
+    /// - An `Err` otherwise.
     pub async fn is_room_alias_available(&self, alias: String) -> Result<bool, ClientError> {
         let alias = RoomAliasId::parse(alias)?;
-        match self.inner.resolve_room_alias(&alias).await {
-            // The room alias was resolved, so it's already in use.
-            Ok(_) => Ok(false),
-            Err(HttpError::Reqwest(error)) => {
-                match error.status() {
-                    // The room alias wasn't found, so it's available.
-                    Some(StatusCode::NOT_FOUND) => Ok(true),
-                    _ => Err(HttpError::Reqwest(error).into()),
-                }
-            }
-            Err(error) => Err(error.into()),
-        }
+        self.inner.is_room_alias_available(&alias).await.map_err(Into::into)
+    }
+
+    /// Creates a new room alias associated with the provided room id.
+    pub async fn create_room_alias(
+        &self,
+        room_alias: String,
+        room_id: String,
+    ) -> Result<(), ClientError> {
+        let room_alias = RoomAliasId::parse(room_alias)?;
+        let room_id = RoomId::parse(room_id)?;
+        self.inner.create_room_alias(&room_alias, &room_id).await.map_err(Into::into)
     }
 }
 
@@ -1618,7 +1633,7 @@ impl TryFrom<Session> for AuthSession {
                 user: user_session,
             };
 
-            Ok(AuthSession::Oidc(session))
+            Ok(AuthSession::Oidc(session.into()))
         } else {
             // Create a regular Matrix Session.
             let session = matrix_sdk::matrix_auth::MatrixSession {
@@ -1905,9 +1920,13 @@ pub enum AllowRule {
     /// Only a member of the `room_id` Room can join the one this rule is used
     /// in.
     RoomMembership { room_id: String },
+
+    /// A custom allow rule implementation, containing its JSON representation
+    /// as a `String`.
+    Custom { json: String },
 }
 
-impl TryFrom<JoinRule> for ruma::events::room::join_rules::JoinRule {
+impl TryFrom<JoinRule> for RumaJoinRule {
     type Error = ClientError;
 
     fn try_from(value: JoinRule) -> Result<Self, Self::Error> {
@@ -1917,11 +1936,11 @@ impl TryFrom<JoinRule> for ruma::events::room::join_rules::JoinRule {
             JoinRule::Knock => Ok(Self::Knock),
             JoinRule::Private => Ok(Self::Private),
             JoinRule::Restricted { rules } => {
-                let rules = allow_rules_from(rules)?;
+                let rules = ruma_allow_rules_from_ffi(rules)?;
                 Ok(Self::Restricted(ruma::events::room::join_rules::Restricted::new(rules)))
             }
             JoinRule::KnockRestricted { rules } => {
-                let rules = allow_rules_from(rules)?;
+                let rules = ruma_allow_rules_from_ffi(rules)?;
                 Ok(Self::KnockRestricted(ruma::events::room::join_rules::Restricted::new(rules)))
             }
             JoinRule::Custom { repr } => Ok(serde_json::from_str(&repr)?),
@@ -1929,12 +1948,10 @@ impl TryFrom<JoinRule> for ruma::events::room::join_rules::JoinRule {
     }
 }
 
-fn allow_rules_from(
-    value: Vec<AllowRule>,
-) -> Result<Vec<ruma::events::room::join_rules::AllowRule>, ClientError> {
+fn ruma_allow_rules_from_ffi(value: Vec<AllowRule>) -> Result<Vec<RumaAllowRule>, ClientError> {
     let mut ret = Vec::with_capacity(value.len());
     for rule in value {
-        let rule: Result<ruma::events::room::join_rules::AllowRule, ClientError> = rule.try_into();
+        let rule: Result<RumaAllowRule, ClientError> = rule.try_into();
         match rule {
             Ok(rule) => ret.push(rule),
             Err(error) => return Err(error),
@@ -1943,7 +1960,7 @@ fn allow_rules_from(
     Ok(ret)
 }
 
-impl TryFrom<AllowRule> for ruma::events::room::join_rules::AllowRule {
+impl TryFrom<AllowRule> for RumaAllowRule {
     type Error = ClientError;
 
     fn try_from(value: AllowRule) -> Result<Self, Self::Error> {
@@ -1954,6 +1971,54 @@ impl TryFrom<AllowRule> for ruma::events::room::join_rules::AllowRule {
                     room_id,
                 )))
             }
+            AllowRule::Custom { json } => Ok(Self::_Custom(Box::new(serde_json::from_str(&json)?))),
+        }
+    }
+}
+
+impl TryFrom<RumaJoinRule> for JoinRule {
+    type Error = String;
+    fn try_from(value: RumaJoinRule) -> Result<Self, Self::Error> {
+        match value {
+            RumaJoinRule::Knock => Ok(JoinRule::Knock),
+            RumaJoinRule::Public => Ok(JoinRule::Public),
+            RumaJoinRule::Private => Ok(JoinRule::Private),
+            RumaJoinRule::KnockRestricted(restricted) => {
+                let rules = restricted.allow.into_iter().map(TryInto::try_into).collect::<Result<
+                    Vec<_>,
+                    Self::Error,
+                >>(
+                )?;
+                Ok(JoinRule::KnockRestricted { rules })
+            }
+            RumaJoinRule::Restricted(restricted) => {
+                let rules = restricted.allow.into_iter().map(TryInto::try_into).collect::<Result<
+                    Vec<_>,
+                    Self::Error,
+                >>(
+                )?;
+                Ok(JoinRule::Restricted { rules })
+            }
+            RumaJoinRule::Invite => Ok(JoinRule::Invite),
+            RumaJoinRule::_Custom(_) => Ok(JoinRule::Custom { repr: value.as_str().to_owned() }),
+            _ => Err(format!("Unknown JoinRule: {:?}", value)),
+        }
+    }
+}
+
+impl TryFrom<RumaAllowRule> for AllowRule {
+    type Error = String;
+    fn try_from(value: RumaAllowRule) -> Result<Self, Self::Error> {
+        match value {
+            RumaAllowRule::RoomMembership(membership) => {
+                Ok(AllowRule::RoomMembership { room_id: membership.room_id.to_string() })
+            }
+            RumaAllowRule::_Custom(repr) => {
+                let json = serde_json::to_string(&repr)
+                    .map_err(|e| format!("Couldn't serialize custom AllowRule: {e:?}"))?;
+                Ok(Self::Custom { json })
+            }
+            _ => Err(format!("Invalid AllowRule: {:?}", value)),
         }
     }
 }

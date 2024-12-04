@@ -11,7 +11,7 @@ use matrix_sdk::{
     ComposerDraft as SdkComposerDraft, ComposerDraftType as SdkComposerDraftType,
     RoomHero as SdkRoomHero, RoomMemberships, RoomState,
 };
-use matrix_sdk_ui::timeline::{PaginationError, RoomExt, TimelineFocus};
+use matrix_sdk_ui::timeline::{default_event_filter, PaginationError, RoomExt, TimelineFocus};
 use mime::Mime;
 use ruma::{
     api::client::room::report_content,
@@ -23,10 +23,9 @@ use ruma::{
             message::RoomMessageEventContentWithoutRelation,
             power_levels::RoomPowerLevels as RumaPowerLevels, MediaSource,
         },
-        TimelineEventType,
+        AnyMessageLikeEventContent, AnySyncTimelineEvent, TimelineEventType,
     },
-    EventId, Int, OwnedDeviceId, OwnedTransactionId, OwnedUserId, RoomAliasId, TransactionId,
-    UserId,
+    EventId, Int, OwnedDeviceId, OwnedUserId, RoomAliasId, UserId,
 };
 use tokio::sync::RwLock;
 use tracing::error;
@@ -35,12 +34,12 @@ use super::RUNTIME;
 use crate::{
     chunk_iterator::ChunkIterator,
     error::{ClientError, MediaInfoError, RoomError},
-    event::{MessageLikeEventType, StateEventType},
+    event::{MessageLikeEventType, RoomMessageEventMessageType, StateEventType},
     identity_status_change::IdentityStatusChange,
     room_info::RoomInfo,
     room_member::RoomMember,
     ruma::{ImageInfo, Mentions, NotifyType},
-    timeline::{FocusEventError, ReceiptType, Timeline},
+    timeline::{FocusEventError, ReceiptType, SendHandle, Timeline},
     utils::u64_to_uint,
     TaskHandle,
 };
@@ -258,6 +257,48 @@ impl Room {
             .build()
             .await?;
 
+        Ok(Timeline::new(timeline))
+    }
+
+    /// A timeline instance that can be configured to only include RoomMessage
+    /// type events and filter those further based on their message type.
+    ///
+    /// Virtual timeline items will still be provided and the
+    /// `default_event_filter` will be applied before everything else.
+    ///
+    /// # Arguments
+    ///
+    /// * `internal_id_prefix` - An optional String that will be prepended to
+    ///   all the timeline item's internal IDs, making it possible to
+    ///   distinguish different timeline instances from each other.
+    ///
+    /// * `allowed_message_types` - A list of `RoomMessageEventMessageType` that
+    ///   will be allowed to appear in the timeline
+    pub async fn message_filtered_timeline(
+        &self,
+        internal_id_prefix: Option<String>,
+        allowed_message_types: Vec<RoomMessageEventMessageType>,
+    ) -> Result<Arc<Timeline>, ClientError> {
+        let mut builder = matrix_sdk_ui::timeline::Timeline::builder(&self.inner);
+
+        if let Some(internal_id_prefix) = internal_id_prefix {
+            builder = builder.with_internal_id_prefix(internal_id_prefix);
+        }
+
+        builder = builder.event_filter(move |event, room_version_id| {
+            default_event_filter(event, room_version_id)
+                && match event {
+                    AnySyncTimelineEvent::MessageLike(msg) => match msg.original_content() {
+                        Some(AnyMessageLikeEventContent::RoomMessage(content)) => {
+                            allowed_message_types.contains(&content.msgtype.into())
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                }
+        });
+
+        let timeline = builder.build().await?;
         Ok(Timeline::new(timeline))
     }
 
@@ -790,10 +831,8 @@ impl Room {
     pub async fn withdraw_verification_and_resend(
         &self,
         user_ids: Vec<String>,
-        transaction_id: String,
+        send_handle: Arc<SendHandle>,
     ) -> Result<(), ClientError> {
-        let transaction_id: OwnedTransactionId = transaction_id.into();
-
         let user_ids: Vec<OwnedUserId> =
             user_ids.iter().map(UserId::parse).collect::<Result<_, _>>()?;
 
@@ -805,7 +844,7 @@ impl Room {
             }
         }
 
-        self.inner.send_queue().unwedge(&transaction_id).await?;
+        send_handle.try_resend().await?;
 
         Ok(())
     }
@@ -823,10 +862,8 @@ impl Room {
     pub async fn ignore_device_trust_and_resend(
         &self,
         devices: HashMap<String, Vec<String>>,
-        transaction_id: String,
+        send_handle: Arc<SendHandle>,
     ) -> Result<(), ClientError> {
-        let transaction_id: OwnedTransactionId = transaction_id.into();
-
         let encryption = self.inner.client().encryption();
 
         for (user_id, device_ids) in devices.iter() {
@@ -841,26 +878,8 @@ impl Room {
             }
         }
 
-        self.inner.send_queue().unwedge(&transaction_id).await?;
+        send_handle.try_resend().await?;
 
-        Ok(())
-    }
-
-    /// Attempt to manually resend messages that failed to send due to issues
-    /// that should now have been fixed.
-    ///
-    /// This is useful for example, when there's a
-    /// `SessionRecipientCollectionError::VerifiedUserChangedIdentity` error;
-    /// the user may have re-verified on a different device and would now
-    /// like to send the failed message that's waiting on this device.
-    ///
-    /// # Arguments
-    ///
-    /// * `transaction_id` - The send queue transaction identifier of the local
-    ///   echo that should be unwedged.
-    pub async fn try_resend(&self, transaction_id: String) -> Result<(), ClientError> {
-        let transaction_id: &TransactionId = transaction_id.as_str().into();
-        self.inner.send_queue().unwedge(transaction_id).await?;
         Ok(())
     }
 }
@@ -996,7 +1015,7 @@ impl TryFrom<ImageInfo> for RumaAvatarImageInfo {
 
     fn try_from(value: ImageInfo) -> Result<Self, MediaInfoError> {
         let thumbnail_url = if let Some(media_source) = value.thumbnail_source {
-            match media_source.as_ref() {
+            match &media_source.as_ref().media_source {
                 MediaSource::Plain(mxc_uri) => Some(mxc_uri.clone()),
                 MediaSource::Encrypted(_) => return Err(MediaInfoError::InvalidField),
             }

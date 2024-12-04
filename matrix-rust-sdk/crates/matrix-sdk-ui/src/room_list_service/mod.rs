@@ -88,12 +88,16 @@ const DEFAULT_REQUIRED_STATE: &[(StateEventType, &str)] = &[
     (StateEventType::RoomCanonicalAlias, ""),
     (StateEventType::RoomPowerLevels, ""),
     (StateEventType::CallMember, "*"),
+    (StateEventType::RoomJoinRules, ""),
+    // Those two events are required to properly compute room previews.
+    (StateEventType::RoomCreate, ""),
+    (StateEventType::RoomHistoryVisibility, ""),
 ];
 
 /// The default `required_state` constant value for sliding sync room
 /// subscriptions that must be added to `DEFAULT_REQUIRED_STATE`.
 const DEFAULT_ROOM_SUBSCRIPTION_EXTRA_REQUIRED_STATE: &[(StateEventType, &str)] =
-    &[(StateEventType::RoomCreate, ""), (StateEventType::RoomPinnedEvents, "")];
+    &[(StateEventType::RoomPinnedEvents, "")];
 
 /// The default `timeline_limit` value when used with room subscriptions.
 const DEFAULT_ROOM_SUBSCRIPTION_TIMELINE_LIMIT: u32 = 20;
@@ -135,9 +139,10 @@ impl RoomListService {
             }))
             .with_typing_extension(assign!(http::request::Typing::default(), {
                 enabled: Some(true),
-            }))
-            // We don't deal with encryption device messages here so this is safe
-            .share_pos();
+            }));
+        // TODO: Re-enable once we know it creates slowness.
+        // // We don't deal with encryption device messages here so this is safe
+        // .share_pos();
 
         let sliding_sync = builder
             .add_cached_list(

@@ -1,4 +1,5 @@
-#![allow(clippy::assign_op_pattern)] // triggered by bitflags! usage
+#![allow(clippy::assign_op_pattern)] // Triggered by bitflags! usage
+#![allow(unexpected_cfgs)] // Triggered by the `EventContent` macro usage
 
 mod members;
 pub(crate) mod normal;
@@ -50,7 +51,7 @@ use crate::MinimalStateEvent;
 /// The name of the room, either from the metadata or calculated
 /// according to [matrix specification](https://matrix.org/docs/spec/client_server/latest#calculating-the-display-name-for-a-room)
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum DisplayName {
+pub enum RoomDisplayName {
     /// The room has been named explicitly as
     Named(String),
     /// The room has a canonical alias that should be used
@@ -66,9 +67,9 @@ pub enum DisplayName {
 }
 
 const WHITESPACE_REGEX: &str = r"\s+";
-const INVALID_SYMBOLS_REGEX: &str = r"[#,:]+";
+const INVALID_SYMBOLS_REGEX: &str = r"[#,:\{\}\\]+";
 
-impl DisplayName {
+impl RoomDisplayName {
     /// Transforms the current display name into the name part of a
     /// `RoomAliasId`.
     pub fn to_room_alias_name(&self) -> String {
@@ -97,14 +98,16 @@ impl DisplayName {
     }
 }
 
-impl fmt::Display for DisplayName {
+impl fmt::Display for RoomDisplayName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DisplayName::Named(s) | DisplayName::Calculated(s) | DisplayName::Aliased(s) => {
+            RoomDisplayName::Named(s)
+            | RoomDisplayName::Calculated(s)
+            | RoomDisplayName::Aliased(s) => {
                 write!(f, "{s}")
             }
-            DisplayName::EmptyWas(s) => write!(f, "Empty Room (was {s})"),
-            DisplayName::Empty => write!(f, "Empty Room"),
+            RoomDisplayName::EmptyWas(s) => write!(f, "Empty Room (was {s})"),
+            RoomDisplayName::Empty => write!(f, "Empty Room"),
         }
     }
 }
@@ -574,7 +577,7 @@ mod tests {
     use ruma::events::tag::{TagInfo, TagName, Tags};
 
     use super::{BaseRoomInfo, RoomNotableTags};
-    use crate::DisplayName;
+    use crate::RoomDisplayName;
 
     #[test]
     fn test_handle_notable_tags_favourite() {
@@ -608,21 +611,33 @@ mod tests {
 
     #[test]
     fn test_room_alias_from_room_display_name_lowercases() {
-        assert_eq!("roomalias", DisplayName::Named("RoomAlias".to_owned()).to_room_alias_name());
+        assert_eq!(
+            "roomalias",
+            RoomDisplayName::Named("RoomAlias".to_owned()).to_room_alias_name()
+        );
     }
 
     #[test]
     fn test_room_alias_from_room_display_name_removes_whitespace() {
-        assert_eq!("room-alias", DisplayName::Named("Room Alias".to_owned()).to_room_alias_name());
+        assert_eq!(
+            "room-alias",
+            RoomDisplayName::Named("Room Alias".to_owned()).to_room_alias_name()
+        );
     }
 
     #[test]
     fn test_room_alias_from_room_display_name_removes_non_ascii_symbols() {
-        assert_eq!("roomalias", DisplayName::Named("Room±Alias√".to_owned()).to_room_alias_name());
+        assert_eq!(
+            "roomalias",
+            RoomDisplayName::Named("Room±Alias√".to_owned()).to_room_alias_name()
+        );
     }
 
     #[test]
     fn test_room_alias_from_room_display_name_removes_invalid_ascii_symbols() {
-        assert_eq!("roomalias", DisplayName::Named("#Room,Alias:".to_owned()).to_room_alias_name());
+        assert_eq!(
+            "roomalias",
+            RoomDisplayName::Named("#Room,{Alias}:".to_owned()).to_room_alias_name()
+        );
     }
 }
