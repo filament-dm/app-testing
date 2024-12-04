@@ -357,6 +357,9 @@ async fn test_sync_all_states() -> Result<(), Error> {
                         ["m.room.canonical_alias", ""],
                         ["m.room.power_levels", ""],
                         ["org.matrix.msc3401.call.member", "*"],
+                        ["m.room.join_rules", ""],
+                        ["m.room.create", ""],
+                        ["m.room.history_visibility", ""],
                     ],
                     "include_heroes": true,
                     "filters": {
@@ -590,6 +593,7 @@ async fn test_sync_resumes_from_previous_state() -> Result<(), Error> {
 }
 
 #[async_test]
+#[ignore] // `share_pos()` has been disabled in the room list, see there to learn more.
 async fn test_sync_resumes_from_previous_state_after_restart() -> Result<(), Error> {
     let tmp_dir = TempDir::new().unwrap();
     let store_path = tmp_dir.path();
@@ -2220,7 +2224,9 @@ async fn test_room_subscription() -> Result<(), Error> {
                         ["m.room.canonical_alias", ""],
                         ["m.room.power_levels", ""],
                         ["org.matrix.msc3401.call.member", "*"],
+                        ["m.room.join_rules", ""],
                         ["m.room.create", ""],
+                        ["m.room.history_visibility", ""],
                         ["m.room.pinned_events", ""],
                     ],
                     "timeline_limit": 20,
@@ -2258,7 +2264,9 @@ async fn test_room_subscription() -> Result<(), Error> {
                         ["m.room.canonical_alias", ""],
                         ["m.room.power_levels", ""],
                         ["org.matrix.msc3401.call.member", "*"],
+                        ["m.room.join_rules", ""],
                         ["m.room.create", ""],
+                        ["m.room.history_visibility", ""],
                         ["m.room.pinned_events", ""],
                     ],
                     "timeline_limit": 20,

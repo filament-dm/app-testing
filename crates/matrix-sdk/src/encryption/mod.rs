@@ -31,7 +31,10 @@ use futures_util::{
     stream::{self, StreamExt},
 };
 use matrix_sdk_base::crypto::{
-    CrossSigningBootstrapRequests, OlmMachine, OutgoingRequest, RoomMessageRequest, ToDeviceRequest,
+    types::requests::{
+        OutgoingRequest, OutgoingVerificationRequest, RoomMessageRequest, ToDeviceRequest,
+    },
+    CrossSigningBootstrapRequests, OlmMachine,
 };
 use matrix_sdk_common::executor::spawn;
 use ruma::{
@@ -377,7 +380,7 @@ impl Client {
     pub(crate) async fn mark_request_as_sent(
         &self,
         request_id: &TransactionId,
-        response: impl Into<matrix_sdk_base::crypto::IncomingResponse<'_>>,
+        response: impl Into<matrix_sdk_base::crypto::types::requests::AnyIncomingResponse<'_>>,
     ) -> Result<(), matrix_sdk_base::Error> {
         Ok(self
             .olm_machine()
@@ -460,8 +463,7 @@ impl Client {
         thumbnail: Option<Thumbnail>,
         send_progress: SharedObservable<TransmissionProgress>,
     ) -> Result<(MediaSource, Option<(MediaSource, Box<ThumbnailInfo>)>)> {
-        let upload_thumbnail =
-            self.upload_encrypted_thumbnail(thumbnail, content_type, send_progress.clone());
+        let upload_thumbnail = self.upload_encrypted_thumbnail(thumbnail, send_progress.clone());
 
         let upload_attachment = async {
             let mut cursor = Cursor::new(data);
@@ -480,27 +482,21 @@ impl Client {
     async fn upload_encrypted_thumbnail(
         &self,
         thumbnail: Option<Thumbnail>,
-        content_type: &mime::Mime,
         send_progress: SharedObservable<TransmissionProgress>,
     ) -> Result<Option<(MediaSource, Box<ThumbnailInfo>)>> {
         let Some(thumbnail) = thumbnail else {
             return Ok(None);
         };
 
-        let mut cursor = Cursor::new(thumbnail.data);
+        let (data, content_type, thumbnail_info) = thumbnail.into_parts();
+        let mut cursor = Cursor::new(data);
 
         let file = self
-            .upload_encrypted_file(content_type, &mut cursor)
+            .upload_encrypted_file(&content_type, &mut cursor)
             .with_send_progress_observable(send_progress)
             .await?;
 
-        #[rustfmt::skip]
-            let thumbnail_info =
-                assign!(thumbnail.info.map(ThumbnailInfo::from).unwrap_or_default(), {
-                    mimetype: Some(thumbnail.content_type.as_ref().to_owned())
-                });
-
-        Ok(Some((MediaSource::Encrypted(Box::new(file)), Box::new(thumbnail_info))))
+        Ok(Some((MediaSource::Encrypted(Box::new(file)), thumbnail_info)))
     }
 
     /// Claim one-time keys creating new Olm sessions.
@@ -586,13 +582,15 @@ impl Client {
 
     pub(crate) async fn send_verification_request(
         &self,
-        request: matrix_sdk_base::crypto::OutgoingVerificationRequest,
+        request: OutgoingVerificationRequest,
     ) -> Result<()> {
+        use matrix_sdk_base::crypto::types::requests::OutgoingVerificationRequest::*;
+
         match request {
-            matrix_sdk_base::crypto::OutgoingVerificationRequest::ToDevice(t) => {
+            ToDevice(t) => {
                 self.send_to_device(&t).await?;
             }
-            matrix_sdk_base::crypto::OutgoingVerificationRequest::InRoom(r) => {
+            InRoom(r) => {
                 self.room_send_helper(&r).await?;
             }
         }
@@ -615,28 +613,28 @@ impl Client {
     }
 
     async fn send_outgoing_request(&self, r: OutgoingRequest) -> Result<()> {
-        use matrix_sdk_base::crypto::OutgoingRequests;
+        use matrix_sdk_base::crypto::types::requests::AnyOutgoingRequest;
 
         match r.request() {
-            OutgoingRequests::KeysQuery(request) => {
+            AnyOutgoingRequest::KeysQuery(request) => {
                 self.keys_query(r.request_id(), request.device_keys.clone()).await?;
             }
-            OutgoingRequests::KeysUpload(request) => {
+            AnyOutgoingRequest::KeysUpload(request) => {
                 self.keys_upload(r.request_id(), request).await?;
             }
-            OutgoingRequests::ToDeviceRequest(request) => {
+            AnyOutgoingRequest::ToDeviceRequest(request) => {
                 let response = self.send_to_device(request).await?;
                 self.mark_request_as_sent(r.request_id(), &response).await?;
             }
-            OutgoingRequests::SignatureUpload(request) => {
+            AnyOutgoingRequest::SignatureUpload(request) => {
                 let response = self.send(request.clone(), None).await?;
                 self.mark_request_as_sent(r.request_id(), &response).await?;
             }
-            OutgoingRequests::RoomMessage(request) => {
+            AnyOutgoingRequest::RoomMessage(request) => {
                 let response = self.room_send_helper(request).await?;
                 self.mark_request_as_sent(r.request_id(), &response).await?;
             }
-            OutgoingRequests::KeysClaim(request) => {
+            AnyOutgoingRequest::KeysClaim(request) => {
                 let response = self.send(request.clone(), None).await?;
                 self.mark_request_as_sent(r.request_id(), &response).await?;
             }
@@ -774,7 +772,7 @@ impl Encryption {
     /// # anyhow::Ok(()) };
     /// ```
     pub fn verification_state(&self) -> Subscriber<VerificationState> {
-        self.client.inner.verification_state.subscribe()
+        self.client.inner.verification_state.subscribe_reset()
     }
 
     /// Get a verification object with the given flow id.
@@ -1458,6 +1456,8 @@ impl Encryption {
     /// caches.
     ///
     /// The provided `lock_value` must be a unique identifier for this process.
+    /// Check [`Client::cross_process_store_locks_holder_name`] to
+    /// get the global value.
     pub async fn enable_cross_process_store_lock(&self, lock_value: String) -> Result<(), Error> {
         // If the lock has already been created, don't recreate it from scratch.
         if let Some(prev_lock) = self.client.locks().cross_process_crypto_store_lock.get() {
@@ -1604,6 +1604,10 @@ impl Encryption {
 
         let this = self.clone();
         tasks.setup_e2ee = Some(spawn(async move {
+            // Update the current state first, so we don't have to wait for the result of
+            // network requests
+            this.update_verification_state().await;
+
             if this.settings().auto_enable_cross_signing {
                 if let Err(e) = this.bootstrap_cross_signing_if_needed(auth_data).await {
                     error!("Couldn't bootstrap cross signing {e:?}");
@@ -1616,8 +1620,6 @@ impl Encryption {
             if let Err(e) = this.recovery().setup().await {
                 error!("Couldn't setup and resume recovery {e:?}");
             }
-
-            this.update_verification_state().await;
         }));
     }
 
@@ -1696,7 +1698,14 @@ impl Encryption {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        ops::Not,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+        time::Duration,
+    };
 
     use matrix_sdk_base::SessionMeta;
     use matrix_sdk_test::{
@@ -1711,13 +1720,15 @@ mod tests {
     use serde_json::json;
     use wiremock::{
         matchers::{header, method, path_regex},
-        Mock, MockServer, ResponseTemplate,
+        Mock, MockServer, Request, ResponseTemplate,
     };
 
     use crate::{
+        assert_next_matches_with_timeout,
         config::RequestConfig,
+        encryption::VerificationState,
         matrix_auth::{MatrixSession, MatrixSessionTokens},
-        test_utils::logged_in_client,
+        test_utils::{logged_in_client, no_retry_test_client, set_client_session},
         Client,
     };
 
@@ -2016,5 +2027,41 @@ mod tests {
         // Re-taking the lock doesn't update the olm machine.
         let after_taking_lock_second_time = client.olm_machine().await.as_ref().unwrap().clone();
         assert!(after_taking_lock_first_time.same_as(&after_taking_lock_second_time));
+    }
+
+    #[async_test]
+    async fn test_update_verification_state_is_updated_before_any_requests_happen() {
+        // Given a client and a server
+        let client = no_retry_test_client(None).await;
+        let server = MockServer::start().await;
+
+        // When we subscribe to its verification state
+        let mut verification_state = client.encryption().verification_state();
+
+        // We can get its initial value, and it's Unknown
+        assert_next_matches_with_timeout!(verification_state, VerificationState::Unknown);
+
+        // We set up a mocked request to check this endpoint is not called before
+        // reading the new state
+        let keys_requested = Arc::new(AtomicBool::new(false));
+        let inner_bool = keys_requested.clone();
+
+        Mock::given(method("GET"))
+            .and(path_regex(
+                r"/_matrix/client/r0/user/.*/account_data/m.secret_storage.default_key",
+            ))
+            .respond_with(move |_req: &Request| {
+                inner_bool.fetch_or(true, Ordering::SeqCst);
+                ResponseTemplate::new(200).set_body_json(json!({}))
+            })
+            .mount(&server)
+            .await;
+
+        // When the session is initialised and the encryption tasks spawn
+        set_client_session(&client).await;
+
+        // Then we can get an updated value without waiting for any network requests
+        assert!(keys_requested.load(Ordering::SeqCst).not());
+        assert_next_matches_with_timeout!(verification_state, VerificationState::Unverified);
     }
 }

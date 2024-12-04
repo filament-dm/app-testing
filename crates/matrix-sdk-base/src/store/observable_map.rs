@@ -14,212 +14,144 @@
 
 //! An [`ObservableMap`] implementation.
 
-#[cfg(not(target_arch = "wasm32"))]
-mod impl_non_wasm32 {
-    use std::{borrow::Borrow, collections::HashMap, hash::Hash};
+use std::{borrow::Borrow, collections::HashMap, hash::Hash};
 
-    use eyeball_im::{ObservableVector, Vector, VectorDiff};
-    use futures_util::Stream;
+use eyeball_im::{ObservableVector, Vector, VectorDiff};
+use futures_util::Stream;
 
-    /// An observable map.
-    ///
-    /// This is an “observable map” naive implementation. Just like regular
-    /// hashmap, we have a redirection from a key to a position, and from a
-    /// position to a value. The (key, position) tuples are stored in an
-    /// [`HashMap`]. The (position, value) tuples are stored in an
-    /// [`ObservableVector`]. The (key, position) tuple is only provided for
-    /// fast _reading_ implementations, like `Self::get` and
-    /// `Self::get_or_create`. The (position, value) tuples are observable,
-    /// this is what interests us the most here.
-    ///
-    /// Why not implementing a new `ObservableMap` type in `eyeball-im` instead
-    /// of this custom implementation? Because we want to continue providing
-    /// `VectorDiff` when observing the changes, so that the rest of the API in
-    /// the Matrix Rust SDK aren't broken. Indeed, an `ObservableMap` must
-    /// produce `MapDiff`, which would be quite different.
-    /// Plus, we would like to re-use all our existing code, test, stream
-    /// adapters and so on.
-    ///
-    /// This is a trade-off. This implementation is simple enough for the
-    /// moment, and basically does the job.
-    #[derive(Debug)]
-    pub(crate) struct ObservableMap<K, V>
-    where
-        V: Clone + Send + Sync + 'static,
-    {
-        /// The (key, position) tuples.
-        mapping: HashMap<K, usize>,
+/// An observable map.
+///
+/// This is an “observable map” naive implementation. Just like regular
+/// hashmap, we have a redirection from a key to a position, and from a
+/// position to a value. The (key, position) tuples are stored in an
+/// [`HashMap`]. The (position, value) tuples are stored in an
+/// [`ObservableVector`]. The (key, position) tuple is only provided for
+/// fast _reading_ implementations, like `Self::get` and
+/// `Self::get_or_create`. The (position, value) tuples are observable,
+/// this is what interests us the most here.
+///
+/// Why not implementing a new `ObservableMap` type in `eyeball-im` instead
+/// of this custom implementation? Because we want to continue providing
+/// `VectorDiff` when observing the changes, so that the rest of the API in
+/// the Matrix Rust SDK aren't broken. Indeed, an `ObservableMap` must
+/// produce `MapDiff`, which would be quite different.
+/// Plus, we would like to re-use all our existing code, test, stream
+/// adapters and so on.
+///
+/// This is a trade-off. This implementation is simple enough for the
+/// moment, and basically does the job.
+#[derive(Debug)]
+pub(crate) struct ObservableMap<K, V>
+where
+    V: Clone + 'static,
+{
+    /// The (key, position) tuples.
+    mapping: HashMap<K, usize>,
 
-        /// The values where the indices are the `position` part of
-        /// `Self::mapping`.
-        values: ObservableVector<V>,
+    /// The values where the indices are the `position` part of
+    /// `Self::mapping`.
+    values: ObservableVector<V>,
+}
+
+impl<K, V> ObservableMap<K, V>
+where
+    K: Hash + Eq,
+    V: Clone + 'static,
+{
+    /// Create a new `Self`.
+    pub(crate) fn new() -> Self {
+        Self { mapping: HashMap::new(), values: ObservableVector::new() }
     }
 
-    impl<K, V> ObservableMap<K, V>
-    where
-        K: Hash + Eq,
-        V: Clone + Send + Sync + 'static,
-    {
-        /// Create a new `Self`.
-        pub(crate) fn new() -> Self {
-            Self { mapping: HashMap::new(), values: ObservableVector::new() }
-        }
+    /// Insert a new `V` in the collection.
+    ///
+    /// If the `V` value already exists, it will be updated to the new one.
+    pub(crate) fn insert(&mut self, key: K, value: V) -> usize {
+        match self.mapping.get(&key) {
+            Some(position) => {
+                self.values.set(*position, value);
 
-        /// Insert a new `V` in the collection.
-        ///
-        /// If the `V` value already exists, it will be updated to the new one.
-        pub(crate) fn insert(&mut self, key: K, value: V) -> usize {
-            match self.mapping.get(&key) {
-                Some(position) => {
-                    self.values.set(*position, value);
+                *position
+            }
+            None => {
+                let position = self.values.len();
 
-                    *position
-                }
-                None => {
-                    let position = self.values.len();
+                self.values.push_back(value);
+                self.mapping.insert(key, position);
 
-                    self.values.push_back(value);
-                    self.mapping.insert(key, position);
-
-                    position
-                }
+                position
             }
         }
-
-        /// Reading one `V` value based on their ID, if it exists.
-        pub(crate) fn get<L>(&self, key: &L) -> Option<&V>
-        where
-            K: Borrow<L>,
-            L: Hash + Eq + ?Sized,
-        {
-            self.mapping.get(key).and_then(|position| self.values.get(*position))
-        }
-
-        /// Reading one `V` value based on their ID, or create a new one (by
-        /// using `default`).
-        pub(crate) fn get_or_create<L, F>(&mut self, key: &L, default: F) -> &V
-        where
-            K: Borrow<L>,
-            L: Hash + Eq + ?Sized + ToOwned<Owned = K>,
-            F: FnOnce() -> V,
-        {
-            let position = match self.mapping.get(key) {
-                Some(position) => *position,
-                None => {
-                    let value = default();
-                    let position = self.values.len();
-
-                    self.values.push_back(value);
-                    self.mapping.insert(key.to_owned(), position);
-
-                    position
-                }
-            };
-
-            self.values
-                .get(position)
-                .expect("Value should be present or has just been inserted, but it's missing")
-        }
-
-        /// Return an iterator over the existing values.
-        pub(crate) fn iter(&self) -> impl Iterator<Item = &V> {
-            self.values.iter()
-        }
-
-        /// Get a [`Stream`] of the values.
-        pub(crate) fn stream(&self) -> (Vector<V>, impl Stream<Item = Vec<VectorDiff<V>>>) {
-            self.values.subscribe().into_values_and_batched_stream()
-        }
-
-        /// Remove a `V` value based on their ID, if it exists.
-        ///
-        /// Returns the removed value.
-        pub(crate) fn remove<L>(&mut self, key: &L) -> Option<V>
-        where
-            K: Borrow<L>,
-            L: Hash + Eq + ?Sized,
-        {
-            let position = self.mapping.remove(key)?;
-            Some(self.values.remove(position))
-        }
     }
-}
 
-#[cfg(target_arch = "wasm32")]
-mod impl_wasm32 {
-    use std::{borrow::Borrow, collections::BTreeMap, hash::Hash};
-
-    /// An observable map for Wasm. It's a simple wrapper around `BTreeMap`.
-    #[derive(Debug)]
-    pub(crate) struct ObservableMap<K, V>(BTreeMap<K, V>)
+    /// Reading one `V` value based on their ID, if it exists.
+    pub(crate) fn get<L>(&self, key: &L) -> Option<&V>
     where
-        V: Clone + 'static;
-
-    impl<K, V> ObservableMap<K, V>
-    where
-        K: Hash + Eq + Ord,
-        V: Clone + 'static,
+        K: Borrow<L>,
+        L: Hash + Eq + ?Sized,
     {
-        /// Create a new `Self`.
-        pub(crate) fn new() -> Self {
-            Self(BTreeMap::new())
+        self.mapping.get(key).and_then(|position| self.values.get(*position))
+    }
+
+    /// Reading one `V` value based on their ID, or create a new one (by
+    /// using `default`).
+    pub(crate) fn get_or_create<L, F>(&mut self, key: &L, default: F) -> &V
+    where
+        K: Borrow<L>,
+        L: Hash + Eq + ?Sized + ToOwned<Owned = K>,
+        F: FnOnce() -> V,
+    {
+        let position = match self.mapping.get(key) {
+            Some(position) => *position,
+            None => {
+                let value = default();
+                let position = self.values.len();
+
+                self.values.push_back(value);
+                self.mapping.insert(key.to_owned(), position);
+
+                position
+            }
+        };
+
+        self.values
+            .get(position)
+            .expect("Value should be present or has just been inserted, but it's missing")
+    }
+
+    /// Return an iterator over the existing values.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &V> {
+        self.values.iter()
+    }
+
+    /// Get a [`Stream`] of the values.
+    pub(crate) fn stream(&self) -> (Vector<V>, impl Stream<Item = Vec<VectorDiff<V>>>) {
+        self.values.subscribe().into_values_and_batched_stream()
+    }
+
+    /// Remove a `V` value based on their ID, if it exists.
+    ///
+    /// Returns the removed value.
+    pub(crate) fn remove<L>(&mut self, key: &L) -> Option<V>
+    where
+        K: Borrow<L>,
+        L: Hash + Eq + ?Sized,
+    {
+        let position = self.mapping.remove(key)?;
+
+        // Reindex every mapped entry that is after the position we're looking to
+        // remove.
+        for mapped_pos in self.mapping.values_mut().filter(|pos| **pos > position) {
+            *mapped_pos = mapped_pos.saturating_sub(1);
         }
 
-        /// Insert a new `V` in the collection.
-        ///
-        /// If the `V` value already exists, it will be updated to the new one.
-        pub(crate) fn insert(&mut self, key: K, value: V) {
-            self.0.insert(key, value);
-        }
-
-        /// Reading one `V` value based on their ID, if it exists.
-        pub(crate) fn get<L>(&self, key: &L) -> Option<&V>
-        where
-            K: Borrow<L>,
-            L: Hash + Eq + Ord + ?Sized,
-        {
-            self.0.get(key)
-        }
-
-        /// Reading one `V` value based on their ID, or create a new one (by
-        /// using `default`).
-        pub(crate) fn get_or_create<L, F>(&mut self, key: &L, default: F) -> &V
-        where
-            K: Borrow<L>,
-            L: Hash + Eq + ?Sized + ToOwned<Owned = K>,
-            F: FnOnce() -> V,
-        {
-            self.0.entry(key.to_owned()).or_insert_with(default)
-        }
-
-        /// Return an iterator over the existing values.
-        pub(crate) fn iter(&self) -> impl Iterator<Item = &V> {
-            self.0.values()
-        }
-
-        /// Remove a `V` value based on their ID, if it exists.
-        ///
-        /// Returns the removed value.
-        pub(crate) fn remove<L>(&mut self, key: &L) -> Option<V>
-        where
-            K: Borrow<L>,
-            L: Hash + Eq + Ord + ?Sized,
-        {
-            self.0.remove(key)
-        }
+        Some(self.values.remove(position))
     }
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use impl_non_wasm32::ObservableMap;
-#[cfg(target_arch = "wasm32")]
-pub(crate) use impl_wasm32::ObservableMap;
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(target_arch = "wasm32"))]
     use eyeball_im::VectorDiff;
-    #[cfg(not(target_arch = "wasm32"))]
     use stream_assert::{assert_closed, assert_next_eq, assert_pending};
 
     use super::ObservableMap;
@@ -270,6 +202,12 @@ mod tests {
         assert_eq!(map.get(&'a'), Some(&'E'));
         assert_eq!(map.get(&'b'), Some(&'f'));
         assert_eq!(map.get(&'c'), Some(&'G'));
+
+        // remove non-last item
+        assert_eq!(map.remove(&'b'), Some('f'));
+
+        // get_or_create item after the removed one
+        assert_eq!(map.get_or_create(&'c', || 'G'), &'G');
     }
 
     #[test]
@@ -283,20 +221,26 @@ mod tests {
         // new items
         map.insert('a', 'e');
         map.insert('b', 'f');
+        map.insert('c', 'g');
 
         assert_eq!(map.get(&'a'), Some(&'e'));
         assert_eq!(map.get(&'b'), Some(&'f'));
-        assert!(map.get(&'c').is_none());
+        assert_eq!(map.get(&'c'), Some(&'g'));
+        assert!(map.get(&'d').is_none());
 
-        // remove one item
-        assert_eq!(map.remove(&'b'), Some('f'));
+        // remove last item
+        assert_eq!(map.remove(&'c'), Some('g'));
 
         assert_eq!(map.get(&'a'), Some(&'e'));
-        assert_eq!(map.get(&'b'), None);
+        assert_eq!(map.get(&'b'), Some(&'f'));
         assert_eq!(map.get(&'c'), None);
 
         // remove a non-existent item
         assert_eq!(map.remove(&'c'), None);
+
+        // remove a non-last item
+        assert_eq!(map.remove(&'a'), Some('e'));
+        assert_eq!(map.get(&'b'), Some(&'f'));
     }
 
     #[test]
@@ -314,7 +258,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_stream() {
         let mut map = ObservableMap::<char, char>::new();
