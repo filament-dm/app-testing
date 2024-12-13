@@ -67,6 +67,7 @@ async fn login(config: &Config) -> Result<Client> {
             let client = Client::builder()
                 .homeserver_url(config.homeserver_url.clone())
                 .sqlite_store(config.db_path.clone(), None)
+                .sliding_sync_version_builder(matrix_sdk::sliding_sync::VersionBuilder::DiscoverNative)
                 .with_encryption_settings(EncryptionSettings {
                     auto_enable_cross_signing: false,
                     backup_download_strategy: BackupDownloadStrategy::AfterDecryptionFailure,

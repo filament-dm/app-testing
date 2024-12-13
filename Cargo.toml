@@ -9,7 +9,10 @@ crossterm = "0.28.1"
 futures-util = "0.3.31"
 lazy_static = "1.5.0"
 log = "0.4.22"
-matrix-sdk = { path = "matrix-rust-sdk/crates/matrix-sdk", features = ["e2e-encryption"] }
+matrix-sdk = { path = "matrix-rust-sdk/crates/matrix-sdk", features = [
+    "experimental-sliding-sync",
+    "e2e-encryption",
+] }
 matrix-sdk-ui = { path = "matrix-rust-sdk/crates/matrix-sdk-ui" }
 serde = "1.0.214"
 serde_yaml = "0.9.34"
